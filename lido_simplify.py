@@ -15,7 +15,6 @@ logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
 
 
-env_util.init_w3()
 # Get the balance of an account $env:VAR1=
 # sec = ast.literal_eval(os.getenv('ETH_KEY'))
 # check_wallet = sec[0]
@@ -25,11 +24,15 @@ env_util.init_w3()
 # myContract = web3.eth.contract(contractAddress, abi=contractAbi)
 # encodedData = myContract.encodeABI(fn_name='myFunctionName', args=['foo','bar'])
 
-barebone_tx = {
-    "chainId": env_util.w3.eth.chain_id,
-    "gas": env_util.chain_gas(env_util.chain),
-    "gasPrice": env_util.safe_gas_price(),  # w3.toWei('50', 'gwei')
-}
+
+def barebone_tx():
+    return {
+        "chainId": env_util.w3.eth.chain_id,
+        "gas": env_util.chain_gas(env_util.chain),
+        "gasPrice": env_util.safe_gas_price(),  # w3.toWei('50', 'gwei')
+    }
+
+
 token_list = {
     'mainnet.uniswap': '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984',
     'mainnet.gtc': '0xde30da39c46104798bb5aa3fe8b9e0e1f348163f',
@@ -240,7 +243,7 @@ async def transfer_in(sign_wallet, save=False, wait=True, **kwargs):
     # MOVE eth, and others, now defined in **kwargs
     if save:
         env_util.save_gas()
-    construct_txn = barebone_tx  # transfer ETH, no data
+    construct_txn = barebone_tx()  # transfer ETH, no data
     construct_txn.update(kwargs)
     logging.info(construct_txn)
 
@@ -366,7 +369,7 @@ async def invoke_action(
         }
     )
     logging.info(
-        signer["address"], f'value{int(eth_amt * 1e18)}, USE NONCE{nonce} {json.dumps(tx)}'
+        f'{signer["address"]}  value{int(eth_amt * 1e18)}, USE NONCE{nonce} {json.dumps(tx)}'
     )
     env_util.write_(
         signer,
@@ -393,38 +396,97 @@ def cheap_mint(signer, gas=18, action='NFT1.mintDigitalRightsCharterTokens'):
         print(sleep(5), 'sleep')
 
 
+def zk_to_l1():
+    # here repeated if >bal then transfer, to run this part separately without initial transfer
+
+    env_util.init_w3("zk-goerli")
+    action = 'zksync_bridgetoL1.withdraw'
+
+    dest_addr = env_util.w3.toChecksumAddress(loopwallet['address'])
+    bal = env_util.w3.eth.get_balance(dest_addr) / 1e18
+    zk_eth = random.randrange(90, 131, 19) / 10000
+
+    if zk_eth > bal:
+
+        env_util.init_w3("goerli")
+        asyncio.run(
+            transfer_in(
+                signwallet,
+                value=int(zk_eth * 1e18),
+                nonce=env_util.w3.eth.getTransactionCount(
+                    env_util.w3.toChecksumAddress(signwallet["address"])
+                ),
+                to=dest_addr,
+            )
+        )
+        print(f'{signwallet} will transfer out')
+
+    zk_eth = min(zk_eth, bal)
+
+    # move back from loopwallet zk-goerli that has no API_service, so specify abi manuly
+    env_util.init_w3("zk-goerli")
+    asyncio.run(
+        invoke_action(
+            env_util.chain,
+            action,
+            loopwallet,
+            dest_addr,
+            abi_source="""[
+                    {
+                        "constant": false,
+                        "inputs": [
+                        {
+                            "name": "address",
+                            "type": "address"
+                        }
+                        ],
+                        "name": "withdraw",
+                        "outputs": [],
+                        "type": "function"
+                    }
+                    ]""",
+            unknown_contract=contract_col[action][env_util.chain]["contract"],
+            from_addr=dest_addr,
+            eth_amt=zk_eth * efficiety_in_out,
+        )
+    )
+
+
 if __name__ == "__main__":
 
-    efficiety_in_out = 0.95
+    efficiety_in_out = 0.7
     sec = ast.literal_eval(os.getenv('ETH_KEY'))
 
     # print(https://api.n.xyz/api/v1/address/0xdc56EAbDB4213c8ce1c86a4806e94D286D2cA4e6/balances/fungibles?apikey=4757a0e8-be6f-4617-957f-a0a714a24a4c)
 
     signwallet = sec[0]
-    for i, loopwallet in enumerate(sec[1:10]):
 
+    for i, loopwallet in enumerate(sec[3:10]):
+        zk_eth = random.randrange(90, 131, 19) / 10000  # 0.01ETH #101, 121, 7
+
+        '''
+        env_util.init_w3("goerli")
+        dest_addr = env_util.w3.toChecksumAddress(loopwallet['address'])
         bal = (
-            env_util.w3.eth.get_balance(env_util.w3.toChecksumAddress(loopwallet["address"])) / 1e18
+            env_util.w3.eth.get_balance(dest_addr) / 1e18
         )
-        zk_eth = random.randrange(101, 121, 7) / 10000  # 0.01ETH
         print(f'eth bal:{bal}, we will manipulate {zk_eth}')
-        env_util.chain = "goerli"
-
-        if bal == 0:
+        
+        if bal < zk_eth / efficiety_in_out:
             # distrubet goerli eth to each wallet
             asyncio.run(
                 transfer_in(
                     signwallet,
-                    value=int(random.randrange(90, 100, 3) / 10000 * 1e18),  # 90, 131, 19
+                    value=int(zk_eth * 1e18),
                     nonce=env_util.w3.eth.getTransactionCount(
                         env_util.w3.toChecksumAddress(signwallet["address"])
                     ),
-                    to=env_util.w3.toChecksumAddress(sec[i + 1]["address"]),
+                    to=dest_addr,
                 )
             )
         else:
             action = 'zksync_bridgetoL2.requestL2Transaction'
-            dest_addr = env_util.w3.toChecksumAddress(loopwallet['address'])
+            
 
             asyncio.run(
                 # this bridge to zkL2 request eth_amt also be set
@@ -443,40 +505,9 @@ if __name__ == "__main__":
                     dest_addr,
                     eth_amt=zk_eth,
                 )
-            )
+            )'''
 
-        env_util.chain = "zk-goerli"
-        action = 'zksync_bridgetoL1.withdraw'
-        dest_addr = env_util.w3.toChecksumAddress(loopwallet['address'])
-
-        # move back from loopwallet zk-goerli that has no API_service, so specify abi manuly
-        asyncio.run(
-            invoke_action(
-                env_util.chain,
-                action,
-                loopwallet,
-                env_util.w3.toChecksumAddress(loopwallet['address']),
-                abi_source="""[
-                    {
-                        "constant": false,
-                        "inputs": [
-                        {
-                            "name": "address",
-                            "type": "address"
-                        }
-                        ],
-                        "name": "withdraw",
-                        "outputs": [],
-                        "type": "function"
-                    }
-                    ]""",
-                unknown_contract=contract_col[action][env_util.chain]["contract"],
-                from_addr=env_util.w3.toChecksumAddress(loopwallet['address']),
-                eth_amt=zk_eth * efficiety_in_out,
-            )
-        )
-
-        ''''''
+        zk_to_l1()
     sys.exit()
 
     for signwallet in sec[0:1]:

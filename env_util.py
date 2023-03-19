@@ -17,13 +17,13 @@ rpc_dict = ast.literal_eval(os.getenv('rpc_dict'))
 # https://docs.alchemy.com/docs/how-to-add-alchemy-rpc-endpoints-to-metamask#4.-fill-in-the-required-information
 GAS_LIMIT = 30  # gw
 GAS_FLUCTUATION = 1.16
-chain = "optimism"
+# chain = "optimism"
 gas_dict = {
     'mainnet': 99000,
     'optimism': 888888,
     'arbitrum': 2888888,
-    'goerli': 10000000,
-    'zk-goerli': 10000001,
+    'goerli': 220000,
+    'zk-goerli': 700001,
 }
 #' Failed to submit transaction: invalid sender. can't start a transaction from a non-account' means no-gas specified zksync
 
@@ -33,6 +33,10 @@ logging.getLogger().setLevel(logging.DEBUG)
 
 def safe_gas_price():
     return round(w3.eth.gasPrice * GAS_FLUCTUATION)
+
+
+def display_chain():
+    print(w3.eth.chain_id)
 
 
 def chain_gas(chain: str):
@@ -45,10 +49,11 @@ def chain_gas(chain: str):
         return 0
 
 
-def init_w3():
-    # adding web socket
-    logging.info(f'{chain}, connect to {rpc_dict[chain]}')
+def init_w3(chain_id):
+    # adding web socket, can define and init global in subfunction, other functions can use later
     global w3
+    global chain
+    chain = chain_id
     if 'wss:' in rpc_dict[chain]:
         w3 = Web3(Web3.WebsocketProvider(rpc_dict[chain]))
     else:
@@ -56,6 +61,7 @@ def init_w3():
     # add the geth_poa_middleware to handle the PoA consensus like Polygon, BSC, Fantom
     # w3.middleware_onion.inject(geth_poa_middleware, layer=0)
     # Print if web3 is successfully connected
+    logging.info(f'{chain}, connect to {rpc_dict[chain]}')
     logging.info(f'Connection {w3.isConnected()}, last black {w3.eth.block_number}')
 
 
@@ -162,9 +168,13 @@ def create_tx(
         tx_json["from"] = add_from_addr  # w3.eth.defaultAccount
         # tx_json["chainId"] = 5  # use goerli=5 as chain (logging), own zk-goerli chain=280
     # https://stackoverflow.com/questions/57580702/how-to-call-a-smart-contract-function-using-python-and-web3-py
-    logging.info(f'args are{args}, UNVERIFIED CONTRACT FROM {unverified_contract}')
+    logging.info(
+        f'args are{args}, UNVERIFIED CONTRACT FROM {unverified_contract}, chainid {display_chain()}'
+    )
     construct_txn = contract.functions[func_name](*args).buildTransaction(tx_json)
-    # construct_txn['gas'] = w3.eth.estimateGas(construct_txn)
+    if not chain == 'goerli':
+        print("ADJUSTING GAS")
+        construct_txn['gas'] = w3.eth.estimateGas(construct_txn)
     if unverified_contract:
         tx_json["to"] = w3.toChecksumAddress(unverified_contract)
     logging.info(f'to sign{construct_txn}')
